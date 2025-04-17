@@ -1,0 +1,315 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json
+#name: "home-server"
+
+# https://hub.docker.com/r/tensorchord/pgvecto-rs
+x-postgres-image: &postgres-image "docker.io/tensorchord/pgvecto-rs:pg14-v0.2.0"
+# https://hub.docker.com/_/mysql
+x-mysql-image: &mysql-image "docker.io/mysql:8.4.5-oraclelinux9"
+# https://hub.docker.com/_/redis
+x-redis-image: &redis-image "docker.io/redis:7.2-alpine"
+# https://hub.docker.com/minio/minio
+x-minio-image: &minio-image "docker.io/minio/minio:RELEASE.2025-04-08T15-41-24Z-cpuv1"
+# https://hub.docker.com/minio/mc
+x-minio-mc-image: &minio-mc-image "docker.io/minio/mc:RELEASE.2025-04-08T15-39-49Z-cpuv1"
+# https://hub.docker.com/r/docmost/docmost
+x-docmost-image: &docmost-image "docker.io/docmost/docmost:0.10.2-mailer"
+# https://hub.docker.com/r/vaultwarden/server
+x-vaultwarden-image: &vaultwarden-image "docker.io/vaultwarden/server"
+# https://codeberg.org/forgejo/-/packages/container/forgejo/11-rootless
+x-forgejo-image: &forgejo-image "codeberg.org/forgejo/forgejo:11-rootless"
+# https://github.com/immich-app/immich/pkgs/container/immich-server
+x-immich-server-image: &immich-server-image "ghcr.io/immich-app/immich-server:release"
+# https://github.com/immich-app/immich/pkgs/container/immich-machine-learning
+x-immich-machine-learning-image: &immich-machine-learning-image "ghcr.io/immich-app/immich-machine-learning:release"
+# https://hub.docker.com/_/nginx
+x-nginx-image: &nginx-image "docker.io/nginx:1.26.3-alpine3.20-perl"
+
+services:
+
+  docmost:
+    image: *docmost-image
+    restart: "on-failure:10"
+    container_name: "home-server-docmost"
+    depends_on:
+      - "postgres"
+      - "redis"
+      - "minio-mc"
+    environment:
+      APP_URL: "https://docs.${DOMAIN:?}"
+      APP_SECRET: "${DM_APP_SECRET:?}"
+      DATABASE_URL: "postgresql://${DM_PG_USER:?}:${DM_PG_PASSWORD:?}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${DM_PG_DATABASE:?}?schema=public"
+      REDIS_URL: "redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}"
+      MAIL_DRIVER: "${MAIL_DRIVER:?}"
+      SMTP_HOST: "${SMTP_HOST:?}"
+      SMTP_PORT: "${SMTP_PORT:?}"
+      SMTP_SECURE: "${SMTP_SECURE:?}"
+      SMTP_USERNAME: "${DM_SMTP_USERNAME:?}"
+      SMTP_PASSWORD: "${DM_SMTP_PASSWORD:?}"
+      MAIL_FROM_ADDRESS: "${DM_MAIL_FROM_ADDRESS:?}"
+      MAIL_FROM_NAME: "${DM_MAIL_FROM_NAME:?}"
+      STORAGE_DRIVER: "${DM_STORAGE_DRIVER:?}"
+      AWS_S3_ACCESS_KEY_ID: "${DM_STORAGE_USER:?}"
+      AWS_S3_SECRET_ACCESS_KEY: "${DM_STORAGE_PASSWORD:?}"
+      AWS_S3_REGION: "${MINIO_AWS_S3_REGION:?}"
+      AWS_S3_BUCKET: "${DM_STORAGE_BUCKET:?}"
+      AWS_S3_ENDPOINT: "http://minio:9000"
+      AWS_S3_FORCE_PATH_STYLE: "${MINIO_AWS_S3_FORCE_PATH_STYLE:?}"
+      DRAWIO_URL: "${DM_DRAWIO_URL}"
+    ports:
+      - "${VPN_ADDR:?}:3000:3000"
+    volumes:
+      - { type: "volume", source: "docmost-data", target: "/app/data/storage/" }
+    networks:
+      public:
+
+  vaultwarden:
+    image: *vaultwarden-image
+    restart: "on-failure:10"
+    container_name: "home-server-vaultwarden"
+    depends_on:
+      - "postgres"
+    environment:
+      SMTP_HOST: "${SMTP_HOST:?}"
+      SMTP_SECURITY: "${SMTP_SECURITY:?}"
+      SMTP_PORT: "${SMTP_PORT:?}"
+      SMTP_FROM: "${VW_SMTP_FROM:?}"
+      SMTP_FROM_NAME: "${VW_SMTP_FROM_NAME:?}"
+      SMTP_USERNAME: "${VW_SMTP_USERNAME:?}"
+      SMTP_PASSWORD: "${VW_SMTP_PASSWORD:?}"
+      SMTP_TIMEOUT: "${VW_SMTP_TIMEOUT:?}"
+      PASSWORD_HINTS_ALLOWED: "${VW_PASSWORD_HINTS_ALLOWED:?}"
+      WEBSOCKET_ENABLED: "${VW_WEBSOCKET_ENABLED:?}" # Para soportar WebSockets detrás del proxy inverso
+      SIGNUPS_DOMAINS_WHITELIST: "${VW_SIGNUPS_DOMAINS_WHITELIST:?}"
+      DATABASE_URL: "postgres://${VW_PG_USER:?}:${VW_PG_PASSWORD:?}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${VW_PG_DATABASE:?}"
+      DOMAIN: "https://vw.${DOMAIN}"
+    ports:
+      - "${VPN_ADDR:?}:2001:80"
+    volumes:
+      - { type: "volume", source: "vaultwarden-data", target: "/data/" }
+    networks:
+      public:
+
+  forgejo:
+    image: *forgejo-image
+    restart: "on-failure:10"
+    container_name: "home-server-forgejo"
+    depends_on:
+      - "postgres"
+    environment:
+      USER_UID: 1000
+      USER_GID: 1000
+      FORGEJO__database__DB_TYPE: "${FGJ_DB_TYPE:?}"
+      FORGEJO__database__HOST: "${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}"
+      FORGEJO__database__NAME: "${FGJ_PG_DATABASE:?}"
+      FORGEJO__database__USER: "${FGJ_PG_USER:?}"
+      FORGEJO__database__PASSWD: "${FGJ_PG_PASSWORD:?}"
+      FORGEJO__service__REGISTER_EMAIL_CONFIRM: "${FGJ_REGISTER_EMAIL_CONFIRM}"
+      FORGEJO__service__ENABLE_NOTIFY_MAIL: "${FGJ_ENABLE_NOTIFY_MAIL}"
+      FORGEJO__mailer__PROTOCOL: "${MAIL_DRIVER}"
+      FORGEJO__mailer__SMTP_ADDR: "${SMTP_HOST}"
+      FORGEJO__mailer__SMTP_PORT: "${SMTP_PORT}"
+      FORGEJO__mailer__ENABLED: "${FGJ_MAILER_ENABLED}"
+      FORGEJO__mailer__USER: "${FGJ_MAILER_USER}"
+      FORGEJO__mailer_FROM: "${FGJ_MAILER_FROM}"
+      FORGEJO__mailer__PASSWD: "${FGJ_MAILER_PASSWD}"
+    volumes:
+      - { type: "volume", source: "forgejo-data", target: "/data/" }
+      - { type: "bind", source: "/etc/timezone", target: "/etc/timezone", read_only: true }
+      - { type: "bind", source: "/etc/localtime", target: "/etc/localtime", read_only: true }
+    ports:
+      - "${VPN_ADDR:?}:3001:3000"
+      - "${VPN_ADDR:?}:222:22"
+    networks:
+      public:
+  
+  immich-server:
+    image: *immich-server-image
+    container_name: "home-server-immich-server"
+    restart: "on-failure:10"
+    volumes:
+      - { type: "bind", source: "${IMMICH_UPLOAD_LOCATION:?}", target: "/usr/src/app/upload/", read_only: false }
+      - { type: "bind", source: "/etc/localtime", target: "/etc/localtime", read_only: true }
+    environment:
+      TZ: "${TIMEZONE:?}"
+      IMMICH_ENV: "${IMMICH_ENV:?}"
+      DB_HOSTNAME: "${POSTGRES_HOST:-postgres}"
+      DB_PORT: "${POSTGRES_PORT:-5432}"
+      DB_PASSWORD: "${PG_PASSWORD:?}"
+      DB_USERNAME: "${PG_USER:?}"
+      DB_DATABASE_NAME: "${IMMICH_PG_DATABASE:?}"
+      REDIS_HOSTNAME: "${REDIS_HOST:-redis}"
+      REDIS_PORT: "${REDIS_PORT:-6379}"
+    ports:
+      - "${VPN_ADDR:?}:2283:2283"
+    depends_on:
+      - "redis"
+      - "postgres"
+    healthcheck:
+      disable: false
+    networks:
+      public:
+
+  immich-machine-learning:
+    image: *immich-machine-learning-image
+    restart: "on-failure:10"
+    container_name: "home-server-immich-machine-learning"
+    environment:
+      TZ: "${TIMEZONE:?}"
+    volumes:
+      - { type: "volume", source: "immich-model-cache", target: "/cache/" }
+    healthcheck:
+      disable: false
+    networks:
+      public:
+
+  # musicprints:
+  #   build: ./config/musicprints
+  #   restart: "on-failure:10"
+  #   container_name: "home-server-musicprints"
+  #   environment:
+  #     - PORT=${MP_PORT:?}
+  #     - REDIS_HOST=${REDIS_HOST:-redis}
+  #     - REDIS_PORT=${REDIS_PORT:-6379}
+  #   ports:
+  #     - "${VPN_ADDR:?}:${MP_PORT:?}:${MP_PORT:?}"
+  #   depends_on:
+  #     - "redis"
+
+  postgres:
+    image: *postgres-image
+    restart: "on-failure:10"
+    container_name: "home-server-postgres"
+    environment:
+      POSTGRES_USER: "${PG_USER:?}"
+      POSTGRES_PASSWORD: "${PG_PASSWORD:?}"
+      POSTGRES_DB: "${PG_DATABASE:?}"
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+      USERS: "${DM_PG_USER:?},${VW_PG_USER:?},${FGJ_PG_USER:?},${IMMICH_PG_USER}"
+      PASSWORDS: "${DM_PG_PASSWORD:?},${VW_PG_PASSWORD:?},${FGJ_PG_PASSWORD:?},${IMMICH_PG_PASSWORD}"
+      DATABASES: "${DM_PG_DATABASE:?},${VW_PG_DATABASE:?},${FGJ_PG_DATABASE:?},${IMMICH_PG_DATABASE}"
+    healthcheck:
+      test: >-
+        pg_isready --dbname="$${POSTGRES_DB}" --username="$${POSTGRES_USER}" || exit 1; Chksum="$$(psql --dbname="$${POSTGRES_DB}" --username="$${POSTGRES_USER}" --tuples-only --no-align --command='SELECT COALESCE(SUM(checksum_failures), 0) FROM pg_stat_database')"; echo "checksum failure count is $$Chksum"; [ "$$Chksum" = '0' ] || exit 1
+      interval: 5m
+      # start_interval: 30s
+      start_period: 5m
+    volumes:
+      - { type: "volume", source: "postgres-data", target: "/var/lib/postgresql/data/" }
+      - { type: "bind", source: "./config/postgres/init-db.sh", target: "/docker-entrypoint-initdb.d/init-db.sh", read_only: true }
+    command: >-
+      postgres -c shared_preload_libraries=vectors.so -c 'search_path="$$user", public, vectors' -c logging_collector=on -c max_wal_size=2GB -c shared_buffers=512MB -c wal_compression=on
+    networks:
+      public:
+
+  mysql:
+    image: *mysql-image
+    restart: "on-failure:10"
+    container_name: "home-server-mysql"
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?}"
+      MYSQL_DATABASE: "${MYSQL_DATABASE:?}"
+      MYSQL_USER: "${MYSQL_USER:?}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?}"
+      USERS: "${DM_PG_USER:?}"
+      PASSWORDS: "${DM_PG_PASSWORD:?}"
+      DATABASES: "${DM_PG_DATABASE:?}"
+    volumes:
+      - { type: "volume", source: "mysql-data", target: "/var/lib/mysql/" }
+      - { type: "bind", source: "./config/mysql/init-db.sh", target: "/docker-entrypoint-initdb.d/init-db.sh", read_only: true }
+    networks:
+      public:
+
+  redis:
+    image: *redis-image
+    restart: "on-failure:10"
+    container_name: "home-server-redis"
+    healthcheck:
+      test: redis-cli ping || exit 1
+    volumes:
+      - { type: "volume", source: "redis-data", target: "/data/" }
+    networks:
+      public:
+
+  minio:
+    image: *minio-image
+    restart: "on-failure:10"
+    container_name: "home-server-minio"
+    command: server --console-address ":9001" /data
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:?}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:?}"
+      AWS_S3_FORCE_PATH_STYLE: "${MINIO_AWS_S3_FORCE_PATH_STYLE:?}"
+    ports:
+      - "${LAN_ADDR:?}:9000:9000"  # API S3 compatible
+      - "${LAN_ADDR:?}:9001:9001"  # Web UI
+    volumes:
+      - { type: "volume", source: "minio-data", target: "/data/" }
+    networks:
+      public:
+
+  minio-mc:
+    image: *minio-mc-image
+    restart: "on-failure:10"
+    container_name: "home-server-minio-mc"
+    environment:
+      BUCKETS: "${DM_STORAGE_BUCKET}"
+      USERS: "${DM_STORAGE_USER}"
+      PASSWORDS: "${DM_STORAGE_PASSWORD}"
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:?}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:?}"
+    depends_on:
+      - "minio"
+    volumes:
+      - { type: "bind", source: "./config/minio-mc/entrypoint.sh", target: "/entrypoint.sh", read_only: true }
+    entrypoint: "/entrypoint.sh"
+    networks:
+      public:
+
+  nginx:
+    image: *nginx-image
+    restart: "on-failure:10"
+    container_name: "home-server-nginx"
+    ports:
+      - "${VPN_ADDR}:80:80"
+      - "${VPN_ADDR}:443:443"
+    volumes:
+      - { type: "bind", source: "./config/nginx/nginx.conf", target: "/etc/nginx/nginx.conf", read_only: true }
+      - { type: "bind", source: "./config/nginx/sites-available", target: "/etc/nginx/sites-available", read_only: true }
+      - { type: "bind", source: "./config/nginx/sites-enabled", target: "/etc/nginx/sites-enabled", read_only: true }
+      - { type: "bind", source: "./config/nginx/certs", target: "/etc/nginx/certs", read_only: true }
+      - { type: "bind", source: "./config/nginx/logs", target: "/var/log/nginx", read_only: false }
+    networks:
+      public:
+
+volumes:
+
+  docmost-data:
+    name: "home-server-docmost-data"
+
+  vaultwarden-data:
+    name: "home-server-vaultwarden-data"
+
+  forgejo-data:
+    name: "home-server-forgejo-data"
+
+  immich-model-cache:
+    name: "home-server-immich-model-cache"
+
+  postgres-data:
+    name: "home-server-postgres-data"
+
+  mysql-data:
+    name: "home-server-mysql-data"
+
+  redis-data:
+    name: "home-server-redis-data"
+
+  minio-data:
+    name: "home-server-minio-data"
+
+networks:
+
+  public:
+    name: "home-server-public"
+    driver: "bridge"
+    internal: false
