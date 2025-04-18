@@ -248,18 +248,18 @@ services:
     networks:
       public:
 
-  # musicprints:
-  #   build: ./config/musicprints
-  #   restart: "on-failure:10"
-  #   container_name: "home-server-musicprints"
-  #   environment:
-  #     - PORT=${MP_PORT:?}
-  #     - REDIS_HOST=${REDIS_HOST:-redis}
-  #     - REDIS_PORT=${REDIS_PORT:-6379}
-  #   ports:
-  #     - "${VPN_ADDR:?}:${MP_PORT:?}:${MP_PORT:?}"
-  #   depends_on:
-  #     - "redis"
+  musicprints:
+    build: ./config/musicprints
+    restart: "on-failure:10"
+    container_name: "home-server-musicprints"
+    environment:
+      - PORT=${MP_PORT:-5000}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+    ports:
+      - "${VPN_ADDR:?}:${MP_PORT:?}:${MP_PORT:?}"
+    depends_on:
+      - "redis"
 
   postgres:
     image: *postgres-image
