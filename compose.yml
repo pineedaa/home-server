@@ -102,6 +102,7 @@ services:
     container_name: "home-server-forgejo"
     depends_on:
       - "postgres"
+      - "redis"
     environment:
       USER_UID: 1000
       USER_GID: 1000
@@ -112,6 +113,9 @@ services:
       FORGEJO__database__PASSWD: "${FGJ_PG_PASSWORD:?}"
       FORGEJO__service__REGISTER_EMAIL_CONFIRM: "${FGJ_REGISTER_EMAIL_CONFIRM:?}"
       FORGEJO__service__ENABLE_NOTIFY_MAIL: "${FGJ_ENABLE_NOTIFY_MAIL:?}"
+      FORGEJO__cache__ADAPTER: "${FGJ_CACHE_ADAPTER:?}"
+      FORGEJO__cache__HOST: "redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}/0?pool_size=100&idle_timeout=180s"
+      FORGEJO__server__ROOT_URL: "https://repo.${DOMAIN:?}"
       FORGEJO__mailer__PROTOCOL: "${MAIL_DRIVER:?}"
       FORGEJO__mailer__SMTP_ADDR: "${SMTP_HOST:?}"
       FORGEJO__mailer__SMTP_PORT: "${SMTP_PORT:?}"
