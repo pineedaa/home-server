@@ -15,14 +15,21 @@ x-minio-mc-image: &minio-mc-image "docker.io/minio/mc:RELEASE.2025-04-08T15-39-4
 x-docmost-image: &docmost-image "docker.io/docmost/docmost:0.10.2-mailer"
 # https://hub.docker.com/r/vaultwarden/server
 x-vaultwarden-image: &vaultwarden-image "docker.io/vaultwarden/server"
-# https://codeberg.org/forgejo/-/packages/container/forgejo/11-rootless
-x-forgejo-image: &forgejo-image "codeberg.org/forgejo/forgejo:11-rootless"
+# https://codeberg.org/forgejo/-/packages/container/forgejo/9.0
+x-forgejo-image: &forgejo-image "codeberg.org/forgejo/forgejo:9.0"
 # https://github.com/immich-app/immich/pkgs/container/immich-server
 x-immich-server-image: &immich-server-image "ghcr.io/immich-app/immich-server:release"
 # https://github.com/immich-app/immich/pkgs/container/immich-machine-learning
 x-immich-machine-learning-image: &immich-machine-learning-image "ghcr.io/immich-app/immich-machine-learning:release"
 # https://hub.docker.com/_/nginx
 x-nginx-image: &nginx-image "docker.io/nginx:1.26.3-alpine3.20-perl"
+
+x-docker-in-docker-image: &docker-in-docker-image "code.forgejo.org/oci/docker:dind"
+
+x-forgejo-runner-image: &forgejo-runner-image "code.forgejo.org/forgejo/runner:6.0.1"
+
+x-forgejo-runner-daemon-image: &forgejo-runner-daemon-image "code.forgejo.org/forgejo/runner:6.0.1"
+
 
 services:
 
@@ -103,15 +110,20 @@ services:
       FORGEJO__database__NAME: "${FGJ_PG_DATABASE:?}"
       FORGEJO__database__USER: "${FGJ_PG_USER:?}"
       FORGEJO__database__PASSWD: "${FGJ_PG_PASSWORD:?}"
-      FORGEJO__service__REGISTER_EMAIL_CONFIRM: "${FGJ_REGISTER_EMAIL_CONFIRM}"
-      FORGEJO__service__ENABLE_NOTIFY_MAIL: "${FGJ_ENABLE_NOTIFY_MAIL}"
-      FORGEJO__mailer__PROTOCOL: "${MAIL_DRIVER}"
-      FORGEJO__mailer__SMTP_ADDR: "${SMTP_HOST}"
-      FORGEJO__mailer__SMTP_PORT: "${SMTP_PORT}"
-      FORGEJO__mailer__ENABLED: "${FGJ_MAILER_ENABLED}"
-      FORGEJO__mailer__USER: "${FGJ_MAILER_USER}"
-      FORGEJO__mailer_FROM: "${FGJ_MAILER_FROM}"
-      FORGEJO__mailer__PASSWD: "${FGJ_MAILER_PASSWD}"
+      FORGEJO__service__REGISTER_EMAIL_CONFIRM: "${FGJ_REGISTER_EMAIL_CONFIRM:?}"
+      FORGEJO__service__ENABLE_NOTIFY_MAIL: "${FGJ_ENABLE_NOTIFY_MAIL:?}"
+      FORGEJO__mailer__PROTOCOL: "${MAIL_DRIVER:?}"
+      FORGEJO__mailer__SMTP_ADDR: "${SMTP_HOST:?}"
+      FORGEJO__mailer__SMTP_PORT: "${SMTP_PORT:?}"
+      FORGEJO__mailer__ENABLED: "${FGJ_MAILER_ENABLED:?}"
+      FORGEJO__mailer__USER: "${FGJ_MAILER_USER:?}"
+      FORGEJO__mailer_FROM: "${FGJ_MAILER_FROM:?}"
+      FORGEJO__mailer__PASSWD: "${FGJ_MAILER_PASSWD:?}"
+      FORGEJO__security__INSTALL_LOCK: "${FGJ_INSTALL_LOCK:?}"
+      FORGEJO__log__LEVEL: "${FGJ_LOG_LEVEL:?}"
+      FORGEJO__repository__ENABLE_PUSH_CREATE_USER: "${FGJ_ENABLE_PUSH_CREATE_USER:?}"
+      FORGEJO__repository__DEFAULT_PUSH_CREATE_PRIVATE: "${FGJ_DEFAULT_PUSH_CREATE_PRIVATE:?}"
+      FORGEJO__repository__DEFAULT_REPO_UNITS: "${FGJ_DEFAULT_REPO_UNITS:?}"
     volumes:
       - { type: "volume", source: "forgejo-data", target: "/data/" }
       - { type: "bind", source: "/etc/timezone", target: "/etc/timezone", read_only: true }
@@ -119,6 +131,76 @@ services:
     ports:
       - "${VPN_ADDR:?}:3001:3000"
       - "${VPN_ADDR:?}:222:22"
+    command: >-
+      bash -c '
+      /bin/s6-svscan /etc/s6 &
+      sleep 10 ;
+      su -c "forgejo forgejo-cli actions register --secret ${FGJ_SHARED_SECRET:?}" git ;
+      su -c "forgejo admin user create --admin --username root --password ${FGJ_ROOT_PASSWORD:?} --email ${FGJ_ROOT_MAIL:?}" git ;
+      sleep infinity
+      '
+    networks:
+      public:
+  
+  docker-in-docker:
+    image: *docker-in-docker-image
+    container_name: "home-server-docker-in-docker"
+    hostname: docker  # Must set hostname as TLS certificates are only valid for docker or localhost
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: "${FGJ_DIND_DOCKER_TLS_CERTDIR:?}"
+      DOCKER_HOST: "${FGJ_DIND_DOCKER_HOST:?}"
+    volumes:
+      - { type: "volume", source: "dind-certs", target: "/certs/" }
+    networks:
+      public:
+
+  forgejo-runner:
+    image: *forgejo-runner-image
+    container_name: "home-server-forgejo-runner"
+    links:
+      - "docker-in-docker"
+      - "forgejo"
+    environment:
+      DOCKER_HOST: "${FGJ_RUNNER_DOCKER_HOST:?}"
+    volumes:
+      - { type: "bind", source: "./config/forgejo/runner/data/", target: "/data/", read_only: false }
+    user: 0:0
+    command: >-
+      bash -ec '
+      while : ; do
+        forgejo-runner create-runner-file --connect --instance http://forgejo:3000 --name runner --secret ${FGJ_SHARED_SECRET} && break ;
+        sleep 1 ;
+      done ;
+      sed -i -e "s|\"labels\": null|\"labels\": [\"docker-cli:docker://code.forgejo.org/oci/docker:cli\",\"node-bookworm:docker://code.forgejo.org/oci/node:20-bookworm\"]|" .runner ;
+      forgejo-runner generate-config > config.yml ;
+      sed -i -e "s|  level: info|  level: debug|" config.yml ;
+      sed -i -e "s|network: .*|network: host|" config.yml ;
+      sed -i -e "s|^  envs:$$|  envs:\n    DOCKER_HOST: tcp://docker:2376\n    DOCKER_TLS_VERIFY: 1\n    DOCKER_CERT_PATH: /certs/client|" config.yml ;
+      sed -i -e "s|^  options:|  options: -v /certs/client:/certs/client|" config.yml ;
+      sed -i -e "s|  valid_volumes: \[\]$$|  valid_volumes:\n    - /certs/client|" config.yml ;
+      chown -R 1000:1000 /data
+      '
+    networks:
+      public:
+
+  forgejo-runner-daemon:
+    image: *forgejo-runner-daemon-image
+    container_name: "home-server-forgejo-runner-daemon"
+    links:
+      - docker-in-docker
+      - forgejo
+    environment:
+      DOCKER_HOST: "${FGJ_RUNNER_DOCKER_HOST}"
+      DOCKER_CERT_PATH: "${FGJ_RUNNER_DOCKER_CERT_PATH}"
+      DOCKER_TLS_VERIFY: "${FGJ_RUNNER_DOCKER_TLS_VERIFY}"
+    volumes:
+      - { type: "bind", source: "./config/forgejo/runner/data/", target: "/data/", read_only: false }
+      - { type: "volume", source: "dind-certs", target: "/certs/" }
+    command: >-
+      bash -c '
+      while : ; do test -w .runner && forgejo-runner --config config.yml daemon ; sleep 1 ; done
+      '
     networks:
       public:
   
@@ -291,6 +373,9 @@ volumes:
 
   forgejo-data:
     name: "home-server-forgejo-data"
+
+  dind-certs:
+    name: "home-server-dind-certs"
 
   immich-model-cache:
     name: "home-server-immich-model-cache"
