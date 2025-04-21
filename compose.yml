@@ -96,115 +96,57 @@ services:
     networks:
       public:
 
-  forgejo:
-    image: *forgejo-image
+  gitea:
+    image: gitea/gitea
+    container_name: "home-server-gitea"
     restart: "on-failure:10"
-    container_name: "home-server-forgejo"
-    depends_on:
-      - "postgres"
-      - "redis"
+    volumes:
+      - { type: "volume", source: "gitea-data", target: "/data/" }
+      - { type: "bind", source: "/etc/timezone", target: "/etc/timezone", read_only: true }
+      - { type: "bind", source: "/etc/localtime", target: "/etc/localtime", read_only: true }
+    healthcheck:
+      test: ["CMD", "curl", "-f", "localhost:3000"]
+      interval: 10s
+      retries: 3
+      start_period: 30s
+      timeout: 10s
     environment:
       USER_UID: 1000
       USER_GID: 1000
-      FORGEJO__database__DB_TYPE: "${FGJ_DB_TYPE:?}"
-      FORGEJO__database__HOST: "${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}"
-      FORGEJO__database__NAME: "${FGJ_PG_DATABASE:?}"
-      FORGEJO__database__USER: "${FGJ_PG_USER:?}"
-      FORGEJO__database__PASSWD: "${FGJ_PG_PASSWORD:?}"
-      FORGEJO__service__REGISTER_EMAIL_CONFIRM: "${FGJ_REGISTER_EMAIL_CONFIRM:?}"
-      FORGEJO__service__ENABLE_NOTIFY_MAIL: "${FGJ_ENABLE_NOTIFY_MAIL:?}"
-      FORGEJO__cache__ADAPTER: "${FGJ_CACHE_ADAPTER:?}"
-      FORGEJO__cache__HOST: "redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}/0?pool_size=100&idle_timeout=180s"
-      FORGEJO__server__ROOT_URL: "https://repo.${DOMAIN:?}"
-      FORGEJO__mailer__PROTOCOL: "${MAIL_DRIVER:?}"
-      FORGEJO__mailer__SMTP_ADDR: "${SMTP_HOST:?}"
-      FORGEJO__mailer__SMTP_PORT: "${SMTP_PORT:?}"
-      FORGEJO__mailer__ENABLED: "${FGJ_MAILER_ENABLED:?}"
-      FORGEJO__mailer__USER: "${FGJ_MAILER_USER:?}"
-      FORGEJO__mailer_FROM: "${FGJ_MAILER_FROM:?}"
-      FORGEJO__mailer__PASSWD: "${FGJ_MAILER_PASSWD:?}"
-      FORGEJO__security__INSTALL_LOCK: "${FGJ_INSTALL_LOCK:?}"
-      FORGEJO__log__LEVEL: "${FGJ_LOG_LEVEL:?}"
-      FORGEJO__repository__ENABLE_PUSH_CREATE_USER: "${FGJ_ENABLE_PUSH_CREATE_USER:?}"
-      FORGEJO__repository__DEFAULT_PUSH_CREATE_PRIVATE: "${FGJ_DEFAULT_PUSH_CREATE_PRIVATE:?}"
-      FORGEJO__repository__DEFAULT_REPO_UNITS: "${FGJ_DEFAULT_REPO_UNITS:?}"
-    volumes:
-      - { type: "volume", source: "forgejo-data", target: "/data/" }
-      - { type: "bind", source: "/etc/timezone", target: "/etc/timezone", read_only: true }
-      - { type: "bind", source: "/etc/localtime", target: "/etc/localtime", read_only: true }
+      GITEA_RUNNER_REGISTRATION_TOKEN: "${GITEA_RUNNER_REGISTRATION_TOKEN:?}"
+      GITEA__database__DB_TYPE: "${GITEA_DB_TYPE:-mysql}"
+      GITEA__database__HOST: "${MYSQL_HOST:-mysql}:${MYSQL_PORT:-3306}"
+      GITEA__database__NAME: "${GITEA_DB_NAME:?}"
+      GITEA__database__USER: "${GITEA_DB_USER:?}"
+      GITEA__database__PASSWD: "${GITEA_DB_PASSWORD:?}"
+      GITEA__mailer__ENABLED: "${GITEA_MAILER_ENABLED:?}"
+      GITEA__mailer__FROM: "${GITEA_MAILER_FROM:?}"
+      GITEA__mailer__PROTOCOL: "${MAIL_DRIVER:?}"
+      GITEA__mailer__SMTP_ADDR: "${SMTP_HOST:?}"
+      GITEA__mailer__SMTP_PORT: "${SMTP_PORT:?}"
+      GITEA__mailer__USER: "${GITEA_MAILER_USER:?}"
+      GITEA__mailer__PASSWD: "${GITEA_MAILER_PASSWORD:?}"
+      GITEA__service__ENABLE_NOTIFY_MAIL: "${GITEA_MAILER_ENABLED:?}"
+      GITEA__service__EMAIL_DOMAIN_ALLOWLIST: "${GITEA_EMAIL_DOMAIN_ALLOWLIST:?}"
+      GITEA__security__INSTALL_LOCK: "${GITEA_INSTALL_LOCK:-true}"
     ports:
-      - "${VPN_ADDR:?}:3001:3000"
-      - "${VPN_ADDR:?}:222:22"
-    command: >-
-      bash -c '
-      /bin/s6-svscan /etc/s6 &
-      sleep 10 ;
-      su -c "forgejo forgejo-cli actions register --secret ${FGJ_SHARED_SECRET:?}" git ;
-      su -c "forgejo admin user create --admin --username root --password ${FGJ_ROOT_PASSWORD:?} --email ${FGJ_ROOT_MAIL:?}" git ;
-      sleep infinity
-      '
+      - "${VPN_ADDR:?}:3030:3000"
     networks:
       public:
-  
-  docker-in-docker:
-    image: *docker-in-docker-image
-    container_name: "home-server-docker-in-docker"
-    hostname: docker  # Must set hostname as TLS certificates are only valid for docker or localhost
+
+  runner:
+    image: gitea/act_runner:latest-dind-rootless
+    container_name: "home-server-gitea-runner"
+    restart: "on-failure:10"
     privileged: true
-    environment:
-      DOCKER_TLS_CERTDIR: "${FGJ_DIND_DOCKER_TLS_CERTDIR:?}"
-      DOCKER_HOST: "${FGJ_DIND_DOCKER_HOST:?}"
+    depends_on:
+      - "gitea"
     volumes:
-      - { type: "volume", source: "dind-certs", target: "/certs/" }
-    networks:
-      public:
-
-  forgejo-runner:
-    image: *forgejo-runner-image
-    container_name: "home-server-forgejo-runner"
-    links:
-      - "docker-in-docker"
-      - "forgejo"
+      - { type: "volume", source: "act-runner-data", target: "/data/" }
     environment:
-      DOCKER_HOST: "${FGJ_RUNNER_DOCKER_HOST:?}"
-    volumes:
-      - { type: "bind", source: "./config/forgejo/runner/data/", target: "/data/", read_only: false }
-    user: 0:0
-    command: >-
-      bash -ec '
-      while : ; do
-        forgejo-runner create-runner-file --connect --instance http://forgejo:3000 --name runner --secret ${FGJ_SHARED_SECRET} && break ;
-        sleep 1 ;
-      done ;
-      sed -i -e "s|\"labels\": null|\"labels\": [\"docker-cli:docker://code.forgejo.org/oci/docker:cli\",\"node-bookworm:docker://code.forgejo.org/oci/node:20-bookworm\"]|" .runner ;
-      forgejo-runner generate-config > config.yml ;
-      sed -i -e "s|  level: info|  level: debug|" config.yml ;
-      sed -i -e "s|network: .*|network: host|" config.yml ;
-      sed -i -e "s|^  envs:$$|  envs:\n    DOCKER_HOST: tcp://docker:2376\n    DOCKER_TLS_VERIFY: 1\n    DOCKER_CERT_PATH: /certs/client|" config.yml ;
-      sed -i -e "s|^  options:|  options: -v /certs/client:/certs/client|" config.yml ;
-      sed -i -e "s|  valid_volumes: \[\]$$|  valid_volumes:\n    - /certs/client|" config.yml ;
-      chown -R 1000:1000 /data
-      '
-    networks:
-      public:
-
-  forgejo-runner-daemon:
-    image: *forgejo-runner-daemon-image
-    container_name: "home-server-forgejo-runner-daemon"
-    links:
-      - docker-in-docker
-      - forgejo
-    environment:
-      DOCKER_HOST: "${FGJ_RUNNER_DOCKER_HOST}"
-      DOCKER_CERT_PATH: "${FGJ_RUNNER_DOCKER_CERT_PATH}"
-      DOCKER_TLS_VERIFY: "${FGJ_RUNNER_DOCKER_TLS_VERIFY}"
-    volumes:
-      - { type: "bind", source: "./config/forgejo/runner/data/", target: "/data/", read_only: false }
-      - { type: "volume", source: "dind-certs", target: "/certs/" }
-    command: >-
-      bash -c '
-      while : ; do test -w .runner && forgejo-runner --config config.yml daemon ; sleep 1 ; done
-      '
+      GITEA_INSTANCE_URL: "http://${GITEA_HOST:-gitea}:${GITEA_PORT:-3000}"
+      DOCKER_HOST: "unix:///var/run/user/1000/docker.sock"
+      GITEA_RUNNER_REGISTRATION_TOKEN: "${GITEA_RUNNER_REGISTRATION_TOKEN:?}"
     networks:
       public:
   
@@ -296,9 +238,9 @@ services:
       MYSQL_DATABASE: "${MYSQL_DATABASE:?}"
       MYSQL_USER: "${MYSQL_USER:?}"
       MYSQL_PASSWORD: "${MYSQL_PASSWORD:?}"
-      USERS: "${DM_PG_USER:?}"
-      PASSWORDS: "${DM_PG_PASSWORD:?}"
-      DATABASES: "${DM_PG_DATABASE:?}"
+      USERS: "${DM_PG_USER:?},${GITEA_DB_USER:?}"
+      PASSWORDS: "${DM_PG_PASSWORD:?},${GITEA_DB_PASSWORD:?}"
+      DATABASES: "${DM_PG_DATABASE:?},${GITEA_DB_NAME:?}"
     volumes:
       - { type: "volume", source: "mysql-data", target: "/var/lib/mysql/" }
       - { type: "bind", source: "./config/mysql/init-db.sh", target: "/docker-entrypoint-initdb.d/init-db.sh", read_only: true }
@@ -375,8 +317,11 @@ volumes:
   vaultwarden-data:
     name: "home-server-vaultwarden-data"
 
-  forgejo-data:
-    name: "home-server-forgejo-data"
+  gitea-data:
+    name: "home-server-gitea-data"
+
+  act-runner-data:
+    name: "home-server-act-runner-data"
 
   dind-certs:
     name: "home-server-dind-certs"
