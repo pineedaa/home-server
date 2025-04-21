@@ -15,20 +15,16 @@ x-minio-mc-image: &minio-mc-image "docker.io/minio/mc:RELEASE.2025-04-08T15-39-4
 x-docmost-image: &docmost-image "docker.io/docmost/docmost:0.10.2-mailer"
 # https://hub.docker.com/r/vaultwarden/server
 x-vaultwarden-image: &vaultwarden-image "docker.io/vaultwarden/server"
-# https://codeberg.org/forgejo/-/packages/container/forgejo/9.0
-x-forgejo-image: &forgejo-image "codeberg.org/forgejo/forgejo:9.0"
 # https://github.com/immich-app/immich/pkgs/container/immich-server
 x-immich-server-image: &immich-server-image "ghcr.io/immich-app/immich-server:release"
 # https://github.com/immich-app/immich/pkgs/container/immich-machine-learning
 x-immich-machine-learning-image: &immich-machine-learning-image "ghcr.io/immich-app/immich-machine-learning:release"
 # https://hub.docker.com/_/nginx
 x-nginx-image: &nginx-image "docker.io/nginx:1.26.3-alpine3.20-perl"
-
-x-docker-in-docker-image: &docker-in-docker-image "code.forgejo.org/oci/docker:dind"
-
-x-forgejo-runner-image: &forgejo-runner-image "code.forgejo.org/forgejo/runner:6.0.1"
-
-x-forgejo-runner-daemon-image: &forgejo-runner-daemon-image "code.forgejo.org/forgejo/runner:6.0.1"
+# https://hub.docker.com/gitea/act_runner
+x-gitea-runner-image: &gitea-runner-image "docker.io/gitea/act_runner:latest-dind-rootless"
+# https://hub.docker.com/gitea/gitea
+x-gitea-image: &gitea-image "docker.io/gitea/gitea"
 
 
 services:
@@ -97,7 +93,7 @@ services:
       public:
 
   gitea:
-    image: gitea/gitea
+    image: *gitea-image
     container_name: "home-server-gitea"
     restart: "on-failure:10"
     volumes:
@@ -129,13 +125,16 @@ services:
       GITEA__service__ENABLE_NOTIFY_MAIL: "${GITEA_MAILER_ENABLED:?}"
       GITEA__service__EMAIL_DOMAIN_ALLOWLIST: "${GITEA_EMAIL_DOMAIN_ALLOWLIST:?}"
       GITEA__security__INSTALL_LOCK: "${GITEA_INSTALL_LOCK:-true}"
+      GITEA__server__PROTOCOL: "${GITEA_SERVER_PROTOCOL:?}"
+      GITEA__server__DOMAIN: "${DOMAIN:?}"
+      GITEA__server__ROOT_URL: "${GITEA_SERVER_PROTOCOL:?}://repo.${DOMAIN:?}"
     ports:
       - "${VPN_ADDR:?}:3030:3000"
     networks:
       public:
 
   runner:
-    image: gitea/act_runner:latest-dind-rootless
+    image: *gitea-runner-image
     container_name: "home-server-gitea-runner"
     restart: "on-failure:10"
     privileged: true
