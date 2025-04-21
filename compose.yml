@@ -212,9 +212,9 @@ services:
       POSTGRES_PASSWORD: "${PG_PASSWORD:?}"
       POSTGRES_DB: "${PG_DATABASE:?}"
       POSTGRES_INITDB_ARGS: "--data-checksums"
-      USERS: "${DM_PG_USER:?},${VW_PG_USER:?},${FGJ_PG_USER:?},${IMMICH_PG_USER}"
-      PASSWORDS: "${DM_PG_PASSWORD:?},${VW_PG_PASSWORD:?},${FGJ_PG_PASSWORD:?},${IMMICH_PG_PASSWORD}"
-      DATABASES: "${DM_PG_DATABASE:?},${VW_PG_DATABASE:?},${FGJ_PG_DATABASE:?},${IMMICH_PG_DATABASE}"
+      USERS: "${DM_PG_USER:?},${VW_PG_USER:?},${IMMICH_PG_USER}"
+      PASSWORDS: "${DM_PG_PASSWORD:?},${VW_PG_PASSWORD:?},${IMMICH_PG_PASSWORD}"
+      DATABASES: "${DM_PG_DATABASE:?},${VW_PG_DATABASE:?},${IMMICH_PG_DATABASE}"
     healthcheck:
       test: >-
         pg_isready --dbname="$${POSTGRES_DB}" --username="$${POSTGRES_USER}" || exit 1; Chksum="$$(psql --dbname="$${POSTGRES_DB}" --username="$${POSTGRES_USER}" --tuples-only --no-align --command='SELECT COALESCE(SUM(checksum_failures), 0) FROM pg_stat_database')"; echo "checksum failure count is $$Chksum"; [ "$$Chksum" = '0' ] || exit 1
